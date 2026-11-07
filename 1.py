@@ -2,9 +2,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-# ==========================================
-# 1. GENETIC ALGORITHM PARAMETERS
-# ==========================================
 
 POPULATION_SIZE = 300
 GENERATIONS = 100
@@ -26,17 +23,13 @@ ELITE_COUNT = 2
 np.random.seed(42)
 
 
-# ==========================================
-# 2. OBJECTIVE FUNCTION
-# ==========================================
+
 
 def objective_function(x, y):
     return 150 * (x ** 0.7) * (y ** 0.3)
 
 
-# ==========================================
-# 3. DECODE BINARY CHROMOSOME
-# ==========================================
+
 
 def decode_chromosome(chromosome):
 
@@ -54,9 +47,7 @@ def decode_chromosome(chromosome):
     return x, y
 
 
-# ==========================================
-# 4. FITNESS FUNCTION
-# ==========================================
+
 
 def fitness_function(chromosome):
 
@@ -70,9 +61,7 @@ def fitness_function(chromosome):
     return objective_function(x, y)
 
 
-# ==========================================
-# 5. INITIAL POPULATION
-# ==========================================
+
 
 def create_population():
 
@@ -82,9 +71,7 @@ def create_population():
     )
 
 
-# ==========================================
-# 6. SELECTION - TOURNAMENT SELECTION
-# ==========================================
+
 
 def selection(population, fitness_values):
 
@@ -105,9 +92,7 @@ def selection(population, fitness_values):
     return selected
 
 
-# ==========================================
-# 7. ONE-POINT CROSSOVER
-# ==========================================
+
 
 def crossover(parent1, parent2):
 
@@ -131,9 +116,7 @@ def crossover(parent1, parent2):
     return child1, child2
 
 
-# ==========================================
-# 8. BIT-FLIP MUTATION
-# ==========================================
+
 
 def mutation(chromosome):
 
@@ -146,9 +129,6 @@ def mutation(chromosome):
     return chromosome
 
 
-# ==========================================
-# 9. MAIN GENETIC ALGORITHM
-# ==========================================
 
 population = create_population()
 
@@ -181,7 +161,7 @@ for generation in range(GENERATIONS):
             best_index
         ].copy()
 
-    # Record results
+ 
     best_x, best_y = decode_chromosome(
         global_best_chromosome
     )
@@ -199,7 +179,7 @@ for generation in range(GENERATIONS):
         f"Capital: {best_y:.2f}"
     )
 
-    # Elitism: preserve best chromosomes
+    
     elite_indices = np.argsort(fitness_values)[-ELITE_COUNT:]
 
     new_population = [
@@ -207,7 +187,7 @@ for generation in range(GENERATIONS):
         for i in elite_indices
     ]
 
-    # Generate new offspring
+   
     while len(new_population) < POPULATION_SIZE:
 
         parent1, parent2 = selection(
@@ -227,9 +207,7 @@ for generation in range(GENERATIONS):
     population = np.array(new_population)
 
 
-# ==========================================
-# 10. FINAL RESULTS
-# ==========================================
+
 
 optimal_x, optimal_y = decode_chromosome(
     global_best_chromosome
@@ -254,9 +232,7 @@ print(f"Budget Available:      {BUDGET:.4f}")
 print(f"Budget Remaining:      {BUDGET-total_cost:.4f}")
 
 
-# ==========================================
-# 11. CONVERGENCE GRAPH
-# ==========================================
+
 
 plt.figure(figsize=(10, 5))
 
@@ -281,9 +257,7 @@ plt.tight_layout()
 plt.show()
 
 
-# ==========================================
-# 12. LABOR CONVERGENCE
-# ==========================================
+
 
 plt.figure(figsize=(10, 5))
 
@@ -305,9 +279,7 @@ plt.tight_layout()
 plt.show()
 
 
-# ==========================================
-# 13. CAPITAL CONVERGENCE
-# ==========================================
+
 
 plt.figure(figsize=(10, 5))
 
@@ -329,9 +301,6 @@ plt.tight_layout()
 plt.show()
 
 
-# ==========================================
-# 14. 3D FUNCTION VISUALIZATION
-# ==========================================
 
 from mpl_toolkits.mplot3d import Axes3D
 
