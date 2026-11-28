@@ -2,548 +2,618 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+import time
 
-from sklearn.datasets import load_iris
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import accuracy_score
+# ============================================================
+# 1. BENCHMARK FUNCTIONS
+# ============================================================
 
+def sphere(x):
+    return np.sum(x**2)
 
-# ==========================================================
-# 1. CONFIGURATION
-# ==========================================================
+def rastrigin(x):
+    n = len(x)
+    return 10*n + np.sum(x**2 - 10*np.cos(2*np.pi*x))
 
-POP_SIZE = 30
-GENERATIONS = 100
-MUTATION_RATE = 0.02
-ELITE_SIZE = 2
+def rosenbrock(x):
+    return np.sum(
+        100*(x[1:] - x[:-1]**2)**2
+        + (x[:-1] - 1)**2
+    )
 
-ECA_RULE = 110       # Try 90 or 110
-K_MIN = 1
-K_MAX = 30
+def ackley(x):
+    n = len(x)
+    return (
+        -20*np.exp(-0.2*np.sqrt(np.sum(x**2)/n))
+        - np.exp(np.sum(np.cos(2*np.pi*x))/n)
+        + 20 + np.e
+    )
 
-RANDOM_STATE = 42
-rng = np.random.default_rng(RANDOM_STATE)
-
-
-# ==========================================================
-# 2. LOAD AND PREPROCESS DATASET
-# ==========================================================
-
-data = load_iris()
-
-X = data.data
-y = data.target
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y,
-    test_size=0.30,
-    random_state=RANDOM_STATE,
-    stratify=y
-)
-
-scaler = StandardScaler()
-
-X_train = scaler.fit_transform(X_train)
-X_test = scaler.transform(X_test)
-
-# Validation split from training data
-X_fit, X_val, y_fit, y_val = train_test_split(
-    X_train,
-    y_train,
-    test_size=0.25,
-    random_state=RANDOM_STATE,
-    stratify=y_train
-)
-
-
-# ==========================================================
-# 3. BINARY CHROMOSOME ENCODING
-# ==========================================================
-
-N_BITS = int(np.ceil(np.log2(K_MAX + 1)))
-
-
-def encode(value):
-    return np.array(
-        list(np.binary_repr(value, width=N_BITS)),
-        dtype=int
+def michalewicz(x, m=10):
+    i = np.arange(1, len(x)+1)
+    return -np.sum(
+        np.sin(x) *
+        np.sin(i*x**2/np.pi)**(2*m)
     )
 
 
-def decode(chromosome):
-    value = int("".join(map(str, chromosome)), 2)
+# ============================================================
+# 2. STANDARD GRAY WOLF OPTIMIZATION
+# ============================================================
 
-    return int(np.clip(value, K_MIN, K_MAX))
+def GWO(objective, lb, ub, dim,
+        population=50, iterations=500, seed=42):
 
+    rng = np.random.default_rng(seed)
 
-# ==========================================================
-# 4. FITNESS FUNCTION USING KNN
-# ==========================================================
-
-def fitness(chromosome):
-
-    k = decode(chromosome)
-
-    model = KNeighborsClassifier(
-        n_neighbors=k,
-        weights="uniform"
+    wolves = rng.uniform(
+        lb, ub, (population, dim)
     )
-
-    model.fit(X_fit, y_fit)
-
-    predictions = model.predict(X_val)
-
-    return accuracy_score(y_val, predictions)
-
-
-# ==========================================================
-# 5. INITIAL POPULATION
-# ==========================================================
-
-def initialize_population():
-
-    return rng.integers(
-        0, 2,
-        size=(POP_SIZE, N_BITS)
-    )
-
-
-# ==========================================================
-# 6. ROULETTE WHEEL SELECTION
-# ==========================================================
-
-def roulette_selection(population, fitness_values):
-
-    # Shift fitness to ensure non-negative probabilities
-    probabilities = fitness_values - fitness_values.min() + 1e-8
-
-    probabilities = probabilities / probabilities.sum()
-
-    index = rng.choice(
-        len(population),
-        p=probabilities
-    )
-
-    return population[index].copy()
-
-
-# ==========================================================
-# 7. ELEMENTARY CELLULAR AUTOMATON
-# ==========================================================
-
-def eca_rule(left, center, right, rule=110):
-
-    pattern = (
-        left * 4 +
-        center * 2 +
-        right
-    )
-
-    return (rule >> pattern) & 1
-
-
-def eca_chromosome(chromosome, rule=110):
-
-    n = len(chromosome)
-
-    child = np.zeros(n, dtype=int)
-
-    for i in range(n):
-
-        left = chromosome[i - 1] if i > 0 else 0
-
-        center = chromosome[i]
-
-        right = chromosome[i + 1] if i < n - 1 else 0
-
-        child[i] = eca_rule(
-            left, center, right, rule
-        )
-
-    return child
-
-
-# ==========================================================
-# 8. CGACELL ECA MIXED CROSSOVER
-#    Three-parent cellular automaton crossover
-# ==========================================================
-
-def cgacell_eca_crossover(parent1, parent2, parent3,
-                          rule=110):
-
-    n = len(parent1)
-
-    child = np.zeros(n, dtype=int)
-
-    for i in range(n):
-
-        child[i] = eca_rule(
-            parent1[i],
-            parent2[i],
-            parent3[i],
-            rule
-        )
-
-    return child
-
-
-# ==========================================================
-# 9. TWO-DIMENSIONAL CELLULAR AUTOMATON
-# ==========================================================
-
-def ca_2d_crossover(population, rule=6,
-                    neighborhood="von_neumann",
-                    generations=1):
-
-    grid = population.copy()
-
-    rows, cols = grid.shape
-
-    if neighborhood == "von_neumann":
-        offsets = [
-            (-1, 0), (1, 0),
-            (0, -1), (0, 1)
-        ]
-
-    elif neighborhood == "moore":
-        offsets = [
-            (-1, -1), (-1, 0), (-1, 1),
-            (0, -1),           (0, 1),
-            (1, -1),  (1, 0),  (1, 1)
-        ]
-
-    else:
-        raise ValueError("Unknown neighborhood")
-
-    for _ in range(generations):
-
-        new_grid = np.zeros_like(grid)
-
-        for i in range(rows):
-            for j in range(cols):
-
-                neighborhood_bits = []
-
-                for di, dj in offsets:
-
-                    ni = i + di
-                    nj = j + dj
-
-                    if (0 <= ni < rows and
-                            0 <= nj < cols):
-                        neighborhood_bits.append(
-                            grid[ni, nj]
-                        )
-                    else:
-                        neighborhood_bits.append(0)
-
-                pattern = 0
-
-                for bit in neighborhood_bits:
-                    pattern = (pattern << 1) | int(bit)
-
-                new_grid[i, j] = (
-                    rule >> pattern
-                ) & 1
-
-        grid = new_grid
-
-    return grid
-
-
-# ==========================================================
-# 10. CLASSICAL CROSSOVER OPERATORS
-# ==========================================================
-
-def single_point_crossover(p1, p2):
-
-    point = rng.integers(1, len(p1))
-
-    return np.concatenate([
-        p1[:point],
-        p2[point:]
-    ])
-
-
-def two_point_crossover(p1, p2):
-
-    points = sorted(
-        rng.choice(
-            np.arange(1, len(p1)),
-            size=2,
-            replace=False
-        )
-    )
-
-    a, b = points
-
-    child = p1.copy()
-    child[a:b] = p2[a:b]
-
-    return child
-
-
-def uniform_crossover(p1, p2):
-
-    mask = rng.integers(0, 2, size=len(p1))
-
-    return np.where(mask == 1, p1, p2)
-
-
-# ==========================================================
-# 11. MUTATION
-# ==========================================================
-
-def mutation(chromosome):
-
-    child = chromosome.copy()
-
-    for i in range(len(child)):
-
-        if rng.random() < MUTATION_RATE:
-
-            child[i] = 1 - child[i]
-
-    return child
-
-
-# ==========================================================
-# 12. GENETIC ALGORITHM
-# ==========================================================
-
-def genetic_algorithm(method="cgacell",
-                      rule=110):
-
-    population = initialize_population()
 
     history = []
 
-    best_chromosome = None
-    best_fitness = -1
+    for t in range(iterations):
 
-    for generation in range(GENERATIONS):
-
-        fitness_values = np.array([
-            fitness(ch) for ch in population
+        fitness = np.array([
+            objective(w) for w in wolves
         ])
 
-        best_idx = np.argmax(fitness_values)
+        order = np.argsort(fitness)
 
-        generation_best = fitness_values[best_idx]
+        alpha = wolves[order[0]].copy()
+        beta = wolves[order[1]].copy()
+        delta = wolves[order[2]].copy()
 
-        if generation_best > best_fitness:
+        a = 2 - 2*t/iterations
 
-            best_fitness = generation_best
+        new_wolves = np.zeros_like(wolves)
 
-            best_chromosome = population[
-                best_idx
-            ].copy()
+        for i in range(population):
 
-        history.append(best_fitness)
+            positions = []
 
-        # Elitism
-        elite_indices = np.argsort(
-            fitness_values
-        )[-ELITE_SIZE:]
+            for leader in [alpha, beta, delta]:
 
-        new_population = [
-            population[i].copy()
-            for i in elite_indices
-        ]
+                r1 = rng.random(dim)
+                r2 = rng.random(dim)
 
-        # Generate new offspring
-        while len(new_population) < POP_SIZE:
+                A = 2*a*r1 - a
+                C = 2*r2
 
-            p1 = roulette_selection(
-                population, fitness_values
+                D = np.abs(C*leader - wolves[i])
+
+                X = leader - A*D
+
+                positions.append(X)
+
+            new_wolves[i] = np.mean(
+                positions, axis=0
             )
 
-            p2 = roulette_selection(
-                population, fitness_values
+        wolves = np.clip(new_wolves, lb, ub)
+
+        best = min(
+            objective(w) for w in wolves
+        )
+
+        history.append(best)
+
+    final_fitness = np.array([
+        objective(w) for w in wolves
+    ])
+
+    best_index = np.argmin(final_fitness)
+
+    return (
+        wolves[best_index],
+        final_fitness[best_index],
+        history
+    )
+
+
+# ============================================================
+# 3. PMS-GWO INSPIRED ALGORITHM
+# ============================================================
+
+def PMS_GWO(objective, lb, ub, dim,
+            population=50,
+            iterations=500,
+            escape_rate=0.08,
+            deception_rate=0.02,
+            crowding_weight=0.03,
+            refine_weight=0.5,
+            seed=42):
+
+    rng = np.random.default_rng(seed)
+
+    wolves = rng.uniform(
+        lb, ub, (population, dim)
+    )
+
+    prey = wolves[0].copy()
+
+    history = []
+
+    for t in range(iterations):
+
+        # ----------------------------------------------------
+        # STEP 1: Evaluate population
+        # ----------------------------------------------------
+
+        fitness = np.array([
+            objective(w) for w in wolves
+        ])
+
+        order = np.argsort(fitness)
+
+        alpha = wolves[order[0]].copy()
+        beta = wolves[order[1]].copy()
+        delta = wolves[order[2]].copy()
+
+        alpha_fit = fitness[order[0]]
+
+        # ----------------------------------------------------
+        # STEP 2: Dynamic leadership
+        # ----------------------------------------------------
+
+        # Leaders are reassigned using current fitness ranking.
+
+        # ----------------------------------------------------
+        # STEP 3: Adaptive parameters
+        # ----------------------------------------------------
+
+        progress = t / iterations
+
+        a = 2*(1-progress)
+
+        new_wolves = wolves.copy()
+
+        # Normalize fitness differences for hybrid coefficient
+        fitness_range = (
+            np.max(fitness) - np.min(fitness) + 1e-12
+        )
+
+        # ----------------------------------------------------
+        # STEP 4: Update every wolf
+        # ----------------------------------------------------
+
+        for i in range(population):
+
+            current = wolves[i].copy()
+
+            # Standard GWO leader-guided movement
+
+            leader_positions = []
+
+            for leader in [alpha, beta, delta]:
+
+                r1 = rng.random(dim)
+                r2 = rng.random(dim)
+
+                A = 2*a*r1 - a
+                C = 2*r2
+
+                D = np.abs(C*leader - current)
+
+                candidate = leader - A*D
+
+                leader_positions.append(candidate)
+
+            gwo_position = np.mean(
+                leader_positions, axis=0
             )
 
-            p3 = roulette_selection(
-                population, fitness_values
+            # ------------------------------------------------
+            # STEP 5: Hybrid exploration-exploitation
+            # ------------------------------------------------
+
+            fitness_difference = abs(
+                fitness[i] - alpha_fit
             )
 
-            if method == "cgacell":
+            C_hybrid = 1 - (
+                fitness_difference / fitness_range
+            )
 
-                child = cgacell_eca_crossover(
-                    p1, p2, p3, rule
-                )
+            C_hybrid = np.clip(
+                C_hybrid, 0, 1
+            )
 
-            elif method == "eca_individual":
+            random_movement = rng.normal(
+                0, 1, dim
+            ) * (1-progress)
 
-                child = eca_chromosome(
-                    p1, rule
-                )
+            hybrid_position = (
+                current
+                + refine_weight*C_hybrid*(alpha-current)
+                + 0.1*random_movement
+            )
 
-            elif method == "single":
+            # ------------------------------------------------
+            # STEP 6: Crowding-distance mechanism
+            # ------------------------------------------------
 
-                child = single_point_crossover(
-                    p1, p2
-                )
+            distances = np.linalg.norm(
+                wolves-current, axis=1
+            )
 
-            elif method == "two_point":
+            distances[i] = np.inf
 
-                child = two_point_crossover(
-                    p1, p2
-                )
+            nearest_index = np.argmin(distances)
 
-            elif method == "uniform":
+            nearest = wolves[nearest_index]
 
-                child = uniform_crossover(
-                    p1, p2
-                )
+            crowding_movement = (
+                current-nearest
+            )
+
+            # ------------------------------------------------
+            # STEP 7: Combine movements
+            # ------------------------------------------------
+
+            candidate = (
+                0.5*gwo_position
+                + 0.5*hybrid_position
+                + crowding_weight*crowding_movement
+            )
+
+            # ------------------------------------------------
+            # STEP 8: Step-up / step-down decision
+            # ------------------------------------------------
+
+            candidate = np.clip(
+                candidate, lb, ub
+            )
+
+            candidate_fitness = objective(candidate)
+
+            # Step-up: accept an improving candidate
+            if candidate_fitness < fitness[i]:
+
+                new_wolves[i] = candidate
 
             else:
-                raise ValueError("Unknown method")
 
-            child = mutation(child)
+                # Step-down: exploratory perturbation
+                step_down = (
+                    current
+                    + rng.normal(0, 1, dim)
+                    * (ub-lb)
+                    * 0.02
+                )
 
-            new_population.append(child)
+                step_down = np.clip(
+                    step_down, lb, ub
+                )
 
-        population = np.array(new_population)
+                # Greedy acceptance protects good solutions
+                if objective(step_down) < fitness[i]:
+                    new_wolves[i] = step_down
+                else:
+                    new_wolves[i] = current
 
-        if (generation + 1) % 10 == 0:
+        wolves = np.clip(
+            new_wolves, lb, ub
+        )
 
-            print(
-                f"{method} | Generation "
-                f"{generation + 1} | "
-                f"Best Accuracy: "
-                f"{best_fitness:.4f} | "
-                f"k = {decode(best_chromosome)}"
-            )
+        # ----------------------------------------------------
+        # STEP 9: Prey escape mechanism
+        # ----------------------------------------------------
 
-    return best_chromosome, history
+        fitness = np.array([
+            objective(w) for w in wolves
+        ])
 
+        order = np.argsort(fitness)
 
-# ==========================================================
-# 13. RUN EXPERIMENTS
-# ==========================================================
+        alpha = wolves[order[0]].copy()
 
-methods = [
-    "cgacell",
-    "eca_individual",
-    "single",
-    "two_point",
-    "uniform"
-]
+        distances_to_alpha = np.linalg.norm(
+            wolves-alpha, axis=1
+        )
 
-results = {}
-histories = {}
+        # Trigger escape if the population is crowded
+        if np.mean(distances_to_alpha) < 0.05*(ub-lb):
 
-for method in methods:
+            prey = prey + escape_rate * np.sign(
+                prey-alpha
+            ) * rng.normal(
+                0, 1, dim
+            ) * (ub-lb)
 
-    print("\nRunning:", method)
+        # ----------------------------------------------------
+        # STEP 10: Prey deception mechanism
+        # ----------------------------------------------------
 
-    chromosome, history = genetic_algorithm(
-        method=method,
-        rule=ECA_RULE
+        deceptive_prey = (
+            prey
+            + deception_rate
+            * rng.normal(0, 1, dim)
+            * (ub-lb)
+        )
+
+        deceptive_prey = np.clip(
+            deceptive_prey, lb, ub
+        )
+
+        # Occasionally use deceptive position
+        if rng.random() < 0.10:
+
+            index = rng.integers(population)
+
+            if objective(deceptive_prey) < objective(
+                wolves[index]
+            ):
+                wolves[index] = deceptive_prey
+
+        # ----------------------------------------------------
+        # STEP 11: Preserve the best solution
+        # ----------------------------------------------------
+
+        fitness = np.array([
+            objective(w) for w in wolves
+        ])
+
+        best_index = np.argmin(fitness)
+
+        best_position = wolves[best_index].copy()
+
+        history.append(fitness[best_index])
+
+        # Maintain prey reference as best-known solution
+        prey = best_position.copy()
+
+    # Final result
+
+    fitness = np.array([
+        objective(w) for w in wolves
+    ])
+
+    best_index = np.argmin(fitness)
+
+    return (
+        wolves[best_index],
+        fitness[best_index],
+        history
     )
 
-    results[method] = chromosome
-    histories[method] = history
+
+# ============================================================
+# 4. EXPERIMENTAL COMPARISON
+# ============================================================
+
+benchmarks = {
+
+    "Sphere": {
+        "function": sphere,
+        "lb": -100,
+        "ub": 100,
+        "dim": 30
+    },
+
+    "Rastrigin": {
+        "function": rastrigin,
+        "lb": -5.12,
+        "ub": 5.12,
+        "dim": 30
+    },
+
+    "Rosenbrock": {
+        "function": rosenbrock,
+        "lb": -30,
+        "ub": 30,
+        "dim": 30
+    },
+
+    "Ackley": {
+        "function": ackley,
+        "lb": -32,
+        "ub": 32,
+        "dim": 30
+    },
+
+    "Michalewicz": {
+        "function": michalewicz,
+        "lb": 0,
+        "ub": np.pi,
+        "dim": 10
+    }
+}
 
 
-# ==========================================================
-# 14. FINAL TEST PERFORMANCE
-# ==========================================================
+# ============================================================
+# 5. RUN BOTH ALGORITHMS
+# ============================================================
 
-print("\n========== FINAL RESULTS ==========")
+results = []
 
-result_table = []
+all_histories = {}
 
-for method in methods:
+for name, config in benchmarks.items():
 
-    chromosome = results[method]
+    objective = config["function"]
+    lb = config["lb"]
+    ub = config["ub"]
+    dim = config["dim"]
 
-    best_k = decode(chromosome)
+    print("\nBenchmark:", name)
 
-    model = KNeighborsClassifier(
-        n_neighbors=best_k
+    # Standard GWO
+    start = time.perf_counter()
+
+    gwo_position, gwo_value, gwo_history = GWO(
+        objective, lb, ub, dim
     )
 
-    model.fit(X_train, y_train)
+    gwo_time = time.perf_counter()-start
 
-    predictions = model.predict(X_test)
+    # PMS-GWO
+    start = time.perf_counter()
 
-    test_accuracy = accuracy_score(
-        y_test, predictions
+    pms_position, pms_value, pms_history = PMS_GWO(
+        objective, lb, ub, dim
     )
 
-    result_table.append({
-        "Method": method,
-        "Optimal K": best_k,
-        "Validation Accuracy": fitness(chromosome),
-        "Test Accuracy": test_accuracy * 100
+    pms_time = time.perf_counter()-start
+
+    results.append({
+        "Function": name,
+        "GWO Best": gwo_value,
+        "PMS-GWO Best": pms_value,
+        "GWO Runtime": gwo_time,
+        "PMS-GWO Runtime": pms_time
     })
 
-    print(
-        f"{method:20s} "
-        f"K={best_k:3d} "
-        f"Test Accuracy={test_accuracy * 100:.2f}%"
-    )
+    all_histories[name] = {
+        "GWO": gwo_history,
+        "PMS-GWO": pms_history
+    }
 
-df = pd.DataFrame(result_table)
+    print("GWO best fitness:", gwo_value)
+    print("PMS-GWO best fitness:", pms_value)
 
-print("\n", df.to_string(index=False))
+    print("GWO runtime:", gwo_time)
+    print("PMS-GWO runtime:", pms_time)
 
 
-# ==========================================================
-# 15. CONVERGENCE GRAPH
-# ==========================================================
+# ============================================================
+# 6. RESULTS TABLE
+# ============================================================
 
-plt.figure(figsize=(10, 6))
+df = pd.DataFrame(results)
 
-for method in methods:
+print("\nFINAL PERFORMANCE COMPARISON")
 
-    plt.plot(
-        histories[method],
-        label=method
-    )
+print(df.to_string(index=False))
 
-plt.xlabel("Generation")
-plt.ylabel("Best Validation Accuracy")
 
-plt.title(
-    "CGACell Genetic Algorithm vs Traditional GA"
+# ============================================================
+# 7. CONVERGENCE GRAPHS
+# ============================================================
+
+fig, axes = plt.subplots(
+    2, 3, figsize=(16, 9)
 )
 
-plt.legend()
-plt.grid(True)
+axes = axes.flatten()
+
+for i, name in enumerate(benchmarks):
+
+    axes[i].plot(
+        all_histories[name]["GWO"],
+        label="GWO",
+        linewidth=2
+    )
+
+    axes[i].plot(
+        all_histories[name]["PMS-GWO"],
+        label="PMS-GWO",
+        linewidth=2
+    )
+
+    axes[i].set_title(name)
+
+    axes[i].set_xlabel("Iterations")
+
+    axes[i].set_ylabel("Best Fitness")
+
+    axes[i].set_yscale("symlog")
+
+    axes[i].grid(True, alpha=0.3)
+
+    axes[i].legend()
+
+axes[-1].axis("off")
+
+plt.suptitle(
+    "GWO vs PMS-GWO Convergence Comparison",
+    fontsize=16
+)
 
 plt.tight_layout()
+
 plt.show()
 
 
-# ==========================================================
-# 16. FINAL ACCURACY COMPARISON
-# ==========================================================
+# ============================================================
+# 8. RUNTIME COMPARISON
+# ============================================================
 
-plt.figure(figsize=(9, 5))
+x = np.arange(len(df))
+
+width = 0.35
+
+plt.figure(figsize=(10, 5))
 
 plt.bar(
-    df["Method"],
-    df["Test Accuracy"],
-    color=[
-        "green", "orange", "blue",
-        "purple", "red"
-    ]
+    x-width/2,
+    df["GWO Runtime"],
+    width,
+    label="GWO"
 )
 
-plt.xlabel("Crossover Method")
-plt.ylabel("Test Accuracy (%)")
-
-plt.title(
-    "Performance Comparison of Crossover Operators"
+plt.bar(
+    x+width/2,
+    df["PMS-GWO Runtime"],
+    width,
+    label="PMS-GWO"
 )
 
-plt.xticks(rotation=20)
+plt.xticks(x, df["Function"])
 
-plt.grid(axis="y")
+plt.ylabel("Runtime (seconds)")
+
+plt.title("Runtime Comparison")
+
+plt.legend()
+
+plt.grid(axis="y", alpha=0.3)
 
 plt.tight_layout()
+
 plt.show()
+
+
+# ============================================================
+# 9. ACCURACY COMPARISON
+# ============================================================
+
+plt.figure(figsize=(10, 5))
+
+for algorithm in ["GWO", "PMS-GWO"]:
+
+    values = [
+        df.loc[i, algorithm + " Best"]
+        for i in range(len(df))
+    ]
+
+    plt.plot(
+        df["Function"],
+        values,
+        marker="o",
+        label=algorithm
+    )
+
+plt.ylabel("Best Fitness")
+
+plt.title("Optimization Accuracy Comparison")
+
+plt.legend()
+
+plt.grid(True, alpha=0.3)
+
+plt.tight_layout()
+
+plt.show()
+
+
+# ============================================================
+# 10. SAVE EXPERIMENTAL RESULTS
+# ============================================================
+
+df.to_csv(
+    "PMS_GWO_Experimental_Results.csv",
+    index=False
+)
+
+print("\nResults saved successfully.")
